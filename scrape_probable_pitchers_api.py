@@ -1,87 +1,71 @@
+# scrape_probable_pitchers_api.py
+
 import requests
-from datetime import date
-from pprint import pprint
 
-def get_probable_pitchers(target_date=None):
-    if target_date is None:
-        target_date = date.today().isoformat()
+def get_probable_pitchers(date_str):
+    """
+    Pulls probable pitchers and game info from MLB API for the given date.
+    Returns a list of dictionaries (one per game).
+    """
 
-    url = f"https://statsapi.mlb.com/api/v1/schedule"
-    params = {
-        "sportId": "1",
-        "date": target_date,
-        "hydrate": "probablePitcher(note),game(content),linescore,team,weather,decisions",
-        "language": "en"
-    }
+    # Build MLB Stats API URL
+    url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={date_str}&hydrate=probablePitcher(lineups,person,stats),linescore,team,weather"
 
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-
+    response = requests.get(url)
     data = response.json()
 
-    matchups = []
+    games = []
 
-    for day in data.get("dates", []):
-        for game in day.get("games", []):
-            away_team = game["teams"]["away"]["team"]["name"]
-            home_team = game["teams"]["home"]["team"]["name"]
-
-            away_pitcher = game["teams"]["away"].get("probablePitcher", {}).get("fullName")
-            home_pitcher = game["teams"]["home"].get("probablePitcher", {}).get("fullName")
-
-            game_time_utc = game.get("gameDate")
-
-            matchup = {
-                "away_team": away_team,
-                "away_probable_pitcher": away_pitcher,
-                "home_team": home_team,
-                "home_probable_pitcher": home_pitcher,
-                "game_time_utc": game_time_utc
+    for date in data.get("dates", []):
+        for game in date.get("games", []):
+            game_info = {
+                "away_team": game["teams"]["away"]["team"]["name"],
+                "home_team": game["teams"]["home"]["team"]["name"],
+                "away_probable_pitcher": None,
+                "home_probable_pitcher": None,
+                "game_time_utc": game.get("gameDate", None),
+                "weather_condition": None,
+                "weather_temp": None,
+                "weather_wind": None,
+                "lineup_away": [],
+                "lineup_home": []
             }
 
-            weather_data = game.get("weather", {})
-            weather_condition = weather_data.get("condition")
-            weather_temp = weather_data.get("temp")
-            weather_wind = weather_data.get("wind")
-            
-            matchup.update({
-                "weather_condition": weather_condition,
-                "weather_temp": weather_temp,
-                "weather_wind": weather_wind
-            })
+            # Probable pitchers
+            if "probablePitcher" in game["teams"]["away"]:
+                game_info["away_probable_pitcher"] = game["teams"]["away"]["probablePitcher"]["fullName"]
+            if "probablePitcher" in game["teams"]["home"]:
+                game_info["home_probable_pitcher"] = game["teams"]["home"]["probablePitcher"]["fullName"]
 
-            game_pk = game["gamePk"]
-            box_url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
-            box_res = requests.get(box_url)
-            box_res.raise_for_status()
-            box_data = box_res.json()
-            
-            lineup_home = []
-            lineup_away = []
-            
-            for player_id, player in box_data["teams"]["home"]["players"].items():
-                 if "position" in player:
-                      lineup_home.append({
-                           "name": player["person"]["fullName"],
-                           "position": player["position"]["name"]
-                        })
-                      
-            for player_id, player in box_data["teams"]["away"]["players"].items():
-                 if "position" in player:
-                      lineup_away.append({
-                           "name": player["person"]["fullName"],
-                           "position": player["position"]["name"]
-                        })
-                      
-            matchup.update({
-                "lineup_home": lineup_home,
-                "lineup_away": lineup_away
-            })
+            # Weather
+            weather = game.get("weather", None)
+            if weather:
+                game_info["weather_condition"] = weather.get("condition", None)
+                game_info["weather_temp"] = weather.get("temp", None)
+                game_info["weather_wind"] = weather.get("wind", None)
 
-            matchups.append(matchup)
+            # Lineups (if available)
+            away_lineup = []
+            home_lineup = []
 
-    return matchups
+            away_players = game["teams"]["away"].get("probablePitcher", {}).get("lineup", {}).get("expected", [])
+            home_players = game["teams"]["home"].get("probablePitcher", {}).get("lineup", {}).get("expected", [])
 
-if __name__ == "__main__":
-    pitchers = get_probable_pitchers("2024-07-12")
-    pprint(pitchers)
+            if away_players:
+                away_lineup = [
+                    {"name": p.get("fullName", ""), "position": p.get("position", {}).get("name", "")}
+                    for p in away_players
+                ]
+
+            if home_players:
+                home_lineup = [
+                    {"name": p.get("fullName", ""), "position": p.get("position", {}).get("name", "")}
+                    for p in home_players
+                ]
+
+            game_info["lineup_away"] = away_lineup
+            game_info["lineup_home"] = home_lineup
+
+            games.append(game_info)
+
+    return games
